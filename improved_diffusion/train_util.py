@@ -20,6 +20,8 @@ from .fp16_util import (
 from .nn import update_ema
 from .resample import LossAwareSampler, UniformSampler
 
+import wandb
+
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
@@ -52,11 +54,7 @@ class TrainLoop:
         self.batch_size = batch_size
         self.microbatch = microbatch if microbatch > 0 else batch_size
         self.lr = lr
-        self.ema_rate = (
-            [ema_rate]
-            if isinstance(ema_rate, float)
-            else [float(x) for x in ema_rate.split(",")]
-        )
+        self.ema_rate = [ema_rate] if isinstance(ema_rate, float) else [float(x) for x in ema_rate.split(",")]
         self.log_interval = log_interval
         self.save_interval = save_interval
         self.resume_checkpoint = resume_checkpoint
@@ -84,13 +82,9 @@ class TrainLoop:
             self._load_optimizer_state()
             # Model was resumed, either due to a restart or a checkpoint
             # being specified at the command line.
-            self.ema_params = [
-                self._load_ema_parameters(rate) for rate in self.ema_rate
-            ]
+            self.ema_params = [self._load_ema_parameters(rate) for rate in self.ema_rate]
         else:
-            self.ema_params = [
-                copy.deepcopy(self.master_params) for _ in range(len(self.ema_rate))
-            ]
+            self.ema_params = [copy.deepcopy(self.master_params) for _ in range(len(self.ema_rate))]
 
         if th.cuda.is_available():
             self.use_ddp = True
@@ -104,12 +98,11 @@ class TrainLoop:
             )
         else:
             if dist.get_world_size() > 1:
-                logger.warn(
-                    "Distributed training requires CUDA. "
-                    "Gradients will not be synchronized properly!"
-                )
+                logger.warn("Distributed training requires CUDA. " "Gradients will not be synchronized properly!")
             self.use_ddp = False
             self.ddp_model = self.model
+
+    wandb.init(project="imporved_diffusion", entity="quasar529")
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
@@ -118,11 +111,7 @@ class TrainLoop:
             self.resume_step = parse_resume_step_from_filename(resume_checkpoint)
             if dist.get_rank() == 0:
                 logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
-                self.model.load_state_dict(
-                    dist_util.load_state_dict(
-                        resume_checkpoint, map_location=dist_util.dev()
-                    )
-                )
+                self.model.load_state_dict(dist_util.load_state_dict(resume_checkpoint, map_location=dist_util.dev()))
 
         dist_util.sync_params(self.model.parameters())
 
@@ -134,9 +123,7 @@ class TrainLoop:
         if ema_checkpoint:
             if dist.get_rank() == 0:
                 logger.log(f"loading EMA from checkpoint: {ema_checkpoint}...")
-                state_dict = dist_util.load_state_dict(
-                    ema_checkpoint, map_location=dist_util.dev()
-                )
+                state_dict = dist_util.load_state_dict(ema_checkpoint, map_location=dist_util.dev())
                 ema_params = self._state_dict_to_master_params(state_dict)
 
         dist_util.sync_params(ema_params)
@@ -144,14 +131,10 @@ class TrainLoop:
 
     def _load_optimizer_state(self):
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
-        opt_checkpoint = bf.join(
-            bf.dirname(main_checkpoint), f"opt{self.resume_step:06}.pt"
-        )
+        opt_checkpoint = bf.join(bf.dirname(main_checkpoint), f"opt{self.resume_step:06}.pt")
         if bf.exists(opt_checkpoint):
             logger.log(f"loading optimizer state from checkpoint: {opt_checkpoint}")
-            state_dict = dist_util.load_state_dict(
-                opt_checkpoint, map_location=dist_util.dev()
-            )
+            state_dict = dist_util.load_state_dict(opt_checkpoint, map_location=dist_util.dev())
             self.opt.load_state_dict(state_dict)
 
     def _setup_fp16(self):
@@ -159,10 +142,7 @@ class TrainLoop:
         self.model.convert_to_fp16()
 
     def run_loop(self):
-        while (
-            not self.lr_anneal_steps
-            or self.step + self.resume_step < self.lr_anneal_steps
-        ):
+        while not self.lr_anneal_steps or self.step + self.resume_step < self.lr_anneal_steps:
             batch, cond = next(self.data)
             self.run_step(batch, cond)
             if self.step % self.log_interval == 0:
@@ -189,10 +169,7 @@ class TrainLoop:
         zero_grad(self.model_params)
         for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
-            micro_cond = {
-                k: v[i : i + self.microbatch].to(dist_util.dev())
-                for k, v in cond.items()
-            }
+            micro_cond = {k: v[i : i + self.microbatch].to(dist_util.dev()) for k, v in cond.items()}
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
@@ -211,16 +188,13 @@ class TrainLoop:
                     losses = compute_losses()
 
             if isinstance(self.schedule_sampler, LossAwareSampler):
-                self.schedule_sampler.update_with_local_losses(
-                    t, losses["loss"].detach()
-                )
+                self.schedule_sampler.update_with_local_losses(t, losses["loss"].detach())
 
             loss = (losses["loss"] * weights).mean()
-            log_loss_dict(
-                self.diffusion, t, {k: v * weights for k, v in losses.items()}
-            )
+            wandb.log({"train/loss": loss.item()})
+            log_loss_dict(self.diffusion, t, {k: v * weights for k, v in losses.items()})
             if self.use_fp16:
-                loss_scale = 2 ** self.lg_loss_scale
+                loss_scale = 2**self.lg_loss_scale
                 (loss * loss_scale).backward()
             else:
                 loss.backward()
@@ -232,7 +206,7 @@ class TrainLoop:
             return
 
         model_grads_to_master_grads(self.model_params, self.master_params)
-        self.master_params[0].grad.mul_(1.0 / (2 ** self.lg_loss_scale))
+        self.master_params[0].grad.mul_(1.0 / (2**self.lg_loss_scale))
         self._log_grad_norm()
         self._anneal_lr()
         self.opt.step()
@@ -251,7 +225,8 @@ class TrainLoop:
     def _log_grad_norm(self):
         sqsum = 0.0
         for p in self.master_params:
-            sqsum += (p.grad ** 2).sum().item()
+            sqsum += (p.grad**2).sum().item()
+            wandb.log({"train/grad_norm": np.sqrt(sqsum)})
         logger.logkv_mean("grad_norm", np.sqrt(sqsum))
 
     def _anneal_lr(self):
@@ -261,10 +236,12 @@ class TrainLoop:
         lr = self.lr * (1 - frac_done)
         for param_group in self.opt.param_groups:
             param_group["lr"] = lr
+            wandb.log({"train/lr": lr})
 
     def log_step(self):
         logger.logkv("step", self.step + self.resume_step)
         logger.logkv("samples", (self.step + self.resume_step + 1) * self.global_batch)
+        wandb.log({"train/samples": (self.step + self.resume_step + 1) * self.global_batch})
         if self.use_fp16:
             logger.logkv("lg_loss_scale", self.lg_loss_scale)
 
@@ -295,9 +272,7 @@ class TrainLoop:
 
     def _master_params_to_state_dict(self, master_params):
         if self.use_fp16:
-            master_params = unflatten_master_params(
-                self.model.parameters(), master_params
-            )
+            master_params = unflatten_master_params(self.model.parameters(), master_params)
         state_dict = self.model.state_dict()
         for i, (name, _value) in enumerate(self.model.named_parameters()):
             assert name in state_dict
