@@ -10,3 +10,4 @@ anaconda.sh
 improved_diffusion.egg-info/
 wandb/
 *.pt
+results/
