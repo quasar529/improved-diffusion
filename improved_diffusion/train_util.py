@@ -241,7 +241,8 @@ class TrainLoop:
     def log_step(self):
         logger.logkv("step", self.step + self.resume_step)
         logger.logkv("samples", (self.step + self.resume_step + 1) * self.global_batch)
-        wandb.log({"train/samples": (self.step + self.resume_step + 1) * self.global_batch})
+        wandb.log({"train/step": self.step + self.resume_step})
+        wandb.log({"train/samples": (self.step + self.resume_st<F9>ep + 1) * self.global_batch})
         if self.use_fp16:
             logger.logkv("lg_loss_scale", self.lg_loss_scale)
 

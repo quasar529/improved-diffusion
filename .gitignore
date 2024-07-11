@@ -5,3 +5,7 @@ ckpt/
 *.ipynb
 datasets/cifar_test
 datasets/cifar_train
+.venv/
+anaconda.sh
+improved_diffusion.egg-info/
+wandb/
