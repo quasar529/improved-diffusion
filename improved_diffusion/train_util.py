@@ -193,6 +193,11 @@ class TrainLoop:
         progress_bar = tqdm(total=total_batches, desc="Processing Batches", leave=False, dynamic_ncols=True)
 
         for i in range(0, batch.shape[0], self.microbatch):
+            current_batch = i // self.microbatch + 1  # 현재 배치 번호 계산
+            progress_bar.set_description(
+                f"Processing Batches {current_batch}/{total_batches}"
+            )  # 진행 바 설명 업데이트
+
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
             micro_cond = {k: v[i : i + self.microbatch].to(dist_util.dev()) for k, v in cond.items()}
             last_batch = (i + self.microbatch) >= batch.shape[0]
