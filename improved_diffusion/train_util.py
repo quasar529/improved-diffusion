@@ -225,6 +225,7 @@ class TrainLoop:
             progress_bar.update(1)  # 배치 진행 상황 업데이트
 
             tqdm.write(f"Batch {i // self.microbatch + 1}/{len(progress_bar)} - Loss: {loss.item()}")
+        progress_bar.close()  # 배치 진행 바 종료
 
     def optimize_fp16(self):
         if any(not th.isfinite(p.grad).all() for p in self.model_params):
