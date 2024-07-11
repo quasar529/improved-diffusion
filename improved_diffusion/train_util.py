@@ -120,6 +120,7 @@ class TrainLoop:
                 "lr_anneal_steps": lr_anneal_steps,
             }
         )
+        wandb.run.name = f"diffusion_step_resume_checkpoint_{self.resume_checkpoint}"
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
@@ -159,17 +160,21 @@ class TrainLoop:
         self.model.convert_to_fp16()
 
     def run_loop(self):
-        while not self.lr_anneal_steps or self.step + self.resume_step < self.lr_anneal_steps:
-            batch, cond = next(self.data)
-            self.run_step(batch, cond)
-            if self.step % self.log_interval == 0:
-                logger.dumpkvs()
-            if self.step % self.save_interval == 0:
-                self.save()
-                # Run for a finite amount of time in integration tests.
-                if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
-                    return
-            self.step += 1
+        total_steps = self.lr_anneal_steps if self.lr_anneal_steps else float("inf")
+        with tqdm(total=total_steps, desc="Training Progress") as pbar:
+            while not self.lr_anneal_steps or self.step + self.resume_step < self.lr_anneal_steps:
+                batch, cond = next(self.data)
+                self.run_step(batch, cond)
+                if self.step % self.log_interval == 0:
+                    logger.dumpkvs()
+                if self.step % self.save_interval == 0:
+                    self.save()
+                    # Run for a finite amount of time in integration tests.
+                    if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
+                        return
+                self.step += 1
+                pbar.update(1)  # Update the progress bar
+
         # Save the last checkpoint if it wasn't already saved.
         if (self.step - 1) % self.save_interval != 0:
             self.save()
@@ -185,7 +190,7 @@ class TrainLoop:
     def forward_backward(self, batch, cond):
         zero_grad(self.model_params)
         progress_bar = tqdm(range(0, batch.shape[0], self.microbatch), desc="Processing Batches")
-        for i in progress_bar:
+        for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
             micro_cond = {k: v[i : i + self.microbatch].to(dist_util.dev()) for k, v in cond.items()}
             last_batch = (i + self.microbatch) >= batch.shape[0]
@@ -217,6 +222,7 @@ class TrainLoop:
             else:
                 loss.backward()
             progress_bar.set_postfix(loss=loss.item())
+            progress_bar.update(1)  # 배치 진행 상황 업데이트
 
             tqdm.write(f"Batch {i // self.microbatch + 1}/{len(progress_bar)} - Loss: {loss.item()}")
 
