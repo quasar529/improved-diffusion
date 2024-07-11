@@ -21,6 +21,7 @@ from .nn import update_ema
 from .resample import LossAwareSampler, UniformSampler
 
 import wandb
+from tqdm import tqdm
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -167,7 +168,8 @@ class TrainLoop:
 
     def forward_backward(self, batch, cond):
         zero_grad(self.model_params)
-        for i in range(0, batch.shape[0], self.microbatch):
+        progress_bar = tqdm(range(0, batch.shape[0], self.microbatch), desc="Processing Batches")
+        for i in progress_bar:
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
             micro_cond = {k: v[i : i + self.microbatch].to(dist_util.dev()) for k, v in cond.items()}
             last_batch = (i + self.microbatch) >= batch.shape[0]
@@ -198,6 +200,9 @@ class TrainLoop:
                 (loss * loss_scale).backward()
             else:
                 loss.backward()
+            progress_bar.set_postfix(loss=loss.item())
+
+            tqdm.write(f"Batch {i // self.microbatch + 1}/{len(progress_bar)} - Loss: {loss.item()}")
 
     def optimize_fp16(self):
         if any(not th.isfinite(p.grad).all() for p in self.model_params):
@@ -242,7 +247,7 @@ class TrainLoop:
         logger.logkv("step", self.step + self.resume_step)
         logger.logkv("samples", (self.step + self.resume_step + 1) * self.global_batch)
         wandb.log({"train/step": self.step + self.resume_step})
-        wandb.log({"train/samples": (self.step + self.resume_st<F9>ep + 1) * self.global_batch})
+        wandb.log({"train/samples": (self.step + self.resume_step + 1) * self.global_batch})
         if self.use_fp16:
             logger.logkv("lg_loss_scale", self.lg_loss_scale)
 
