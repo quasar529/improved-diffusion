@@ -103,7 +103,23 @@ class TrainLoop:
             self.use_ddp = False
             self.ddp_model = self.model
 
-    wandb.init(project="imporved_diffusion", entity="quasar529")
+        wandb.init(project="imporved_diffusion", entity="quasar529")
+        wandb.config.update(
+            {
+                "batch_size": batch_size,
+                "microbatch": microbatch,
+                "lr": lr,
+                "ema_rate": ema_rate,
+                "log_interval": log_interval,
+                "save_interval": save_interval,
+                "resume_checkpoint": resume_checkpoint,
+                "use_fp16": use_fp16,
+                "fp16_scale_growth": fp16_scale_growth,
+                "schedule_sampler": schedule_sampler,
+                "weight_decay": weight_decay,
+                "lr_anneal_steps": lr_anneal_steps,
+            }
+        )
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
