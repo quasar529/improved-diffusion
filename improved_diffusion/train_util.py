@@ -120,7 +120,7 @@ class TrainLoop:
                 "lr_anneal_steps": lr_anneal_steps,
             }
         )
-        wandb.run.name = f"diffusion_step_resume_checkpoint_{self.resume_checkpoint}"
+        wandb.run.name = f"diffusion_batch_{batch_size}_steps{lr_anneal_steps}_{self.resume_checkpoint}"
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
