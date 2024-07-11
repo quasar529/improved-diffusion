@@ -161,7 +161,7 @@ class TrainLoop:
 
     def run_loop(self):
         total_steps = self.lr_anneal_steps if self.lr_anneal_steps else float("inf")
-        with tqdm(total=total_steps, desc="Training Progress") as pbar:
+        with tqdm(total=total_steps, desc="Training Progress", dynamic_ncols=True) as pbar:
             while not self.lr_anneal_steps or self.step + self.resume_step < self.lr_anneal_steps:
                 batch, cond = next(self.data)
                 self.run_step(batch, cond)
@@ -189,9 +189,9 @@ class TrainLoop:
 
     def forward_backward(self, batch, cond):
         zero_grad(self.model_params)
-        progress_bar = tqdm(
-            range(0, batch.shape[0], self.microbatch), desc="Processing Batches", leave=False, dynamic_ncols=True
-        )
+        total_batches = (batch.shape[0] + self.microbatch - 1) // self.microbatch  # 전체 배치 수 계산
+        progress_bar = tqdm(total=total_batches, desc="Processing Batches", leave=False, dynamic_ncols=True)
+
         for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
             micro_cond = {k: v[i : i + self.microbatch].to(dist_util.dev()) for k, v in cond.items()}
@@ -218,6 +218,7 @@ class TrainLoop:
             loss = (losses["loss"] * weights).mean()
             wandb.log({"train/loss": loss.item()})
             log_loss_dict(self.diffusion, t, {k: v * weights for k, v in losses.items()})
+
             if self.use_fp16:
                 loss_scale = 2**self.lg_loss_scale
                 (loss * loss_scale).backward()
@@ -226,7 +227,6 @@ class TrainLoop:
             progress_bar.set_postfix(loss=loss.item())
             progress_bar.update(1)  # 배치 진행 상황 업데이트
 
-            tqdm.write(f"Batch {i // self.microbatch + 1}/{len(progress_bar)} - Loss: {loss.item()}")
         progress_bar.close()  # 배치 진행 바 종료
 
     def optimize_fp16(self):
