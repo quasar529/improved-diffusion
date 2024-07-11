@@ -189,7 +189,9 @@ class TrainLoop:
 
     def forward_backward(self, batch, cond):
         zero_grad(self.model_params)
-        progress_bar = tqdm(range(0, batch.shape[0], self.microbatch), desc="Processing Batches")
+        progress_bar = tqdm(
+            range(0, batch.shape[0], self.microbatch), desc="Processing Batches", leave=False, dynamic_ncols=True
+        )
         for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
             micro_cond = {k: v[i : i + self.microbatch].to(dist_util.dev()) for k, v in cond.items()}
@@ -274,7 +276,7 @@ class TrainLoop:
         if self.use_fp16:
             logger.logkv("lg_loss_scale", self.lg_loss_scale)
 
-    def save(self):
+    def save(self, save_dir="/home/jun/improved-diffusion/results"):
         def save_checkpoint(rate, params):
             state_dict = self._master_params_to_state_dict(params)
             if dist.get_rank() == 0:
@@ -283,7 +285,8 @@ class TrainLoop:
                     filename = f"model{(self.step+self.resume_step):06d}.pt"
                 else:
                     filename = f"ema_{rate}_{(self.step+self.resume_step):06d}.pt"
-                with bf.BlobFile(bf.join(get_blob_logdir(), filename), "wb") as f:
+                save_path = bf.join(save_dir, filename)
+                with bf.BlobFile(save_path, "wb") as f:
                     th.save(state_dict, f)
 
         save_checkpoint(0, self.master_params)
@@ -291,10 +294,9 @@ class TrainLoop:
             save_checkpoint(rate, params)
 
         if dist.get_rank() == 0:
-            with bf.BlobFile(
-                bf.join(get_blob_logdir(), f"opt{(self.step+self.resume_step):06d}.pt"),
-                "wb",
-            ) as f:
+            opt_filename = f"opt{(self.step+self.resume_step):06d}.pt"
+            opt_save_path = bf.join(save_dir, opt_filename)
+            with bf.BlobFile(opt_save_path, "wb") as f:
                 th.save(self.opt.state_dict(), f)
 
         dist.barrier()
