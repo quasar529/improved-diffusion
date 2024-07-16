@@ -23,10 +23,10 @@ def main():
     logger.configure()
 
     logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(
-        **args_to_dict(args, model_and_diffusion_defaults().keys())
-    )
+    model, diffusion = create_model_and_diffusion(**args_to_dict(args, model_and_diffusion_defaults().keys()))
+    #model.load_state_dict(dist_util.load_state_dict(args.model_path, map_location="cpu"))
     model.to(dist_util.dev())
+    print(dist_util.dev())
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
 
     logger.log("creating data loader...")
@@ -63,15 +63,16 @@ def create_argparser():
         schedule_sampler="uniform",
         lr=1e-4,
         weight_decay=0.0,
-        lr_anneal_steps=0,
+        lr_anneal_steps=10000,
         batch_size=1,
         microbatch=-1,  # -1 disables microbatches
         ema_rate="0.9999",  # comma-separated list of EMA values
         log_interval=10,
-        save_interval=10000,
+        save_interval=5000,
         resume_checkpoint="",
-        use_fp16=False,
+        use_fp16=True,
         fp16_scale_growth=1e-3,
+        model_path="",
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
