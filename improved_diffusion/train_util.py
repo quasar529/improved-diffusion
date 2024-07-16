@@ -202,7 +202,8 @@ class TrainLoop:
             )  # 진행 바 설명 업데이트
 
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
-            noised_micro = self.diffusion.q_sample(micro, t0)  # 원본 이미지 x_start에 T0만큼의 노이즈 추가
+            t0_tensor = th.full((micro.shape[0],), t0, device=micro.device, dtype=th.long)
+            noised_micro = self.diffusion.q_sample(micro, t0_tensor)  # 원본 이미지 x_start에 T0만큼의 노이즈 추가
 
             micro_cond = {k: v[i : i + self.microbatch].to(dist_util.dev()) for k, v in cond.items()}
             last_batch = (i + self.microbatch) >= batch.shape[0]
