@@ -24,7 +24,7 @@ def main():
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(**args_to_dict(args, model_and_diffusion_defaults().keys()))
-    #model.load_state_dict(dist_util.load_state_dict(args.model_path, map_location="cpu"))
+    # model.load_state_dict(dist_util.load_state_dict(args.model_path, map_location="cpu"))
     model.to(dist_util.dev())
     print(dist_util.dev())
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
@@ -54,6 +54,7 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        t0=args.t0,
     ).run_loop()
 
 
@@ -73,6 +74,7 @@ def create_argparser():
         use_fp16=True,
         fp16_scale_growth=1e-3,
         model_path="",
+        t0=1000,
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
