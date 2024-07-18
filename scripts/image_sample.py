@@ -48,6 +48,7 @@ def main():
             model,
             (args.batch_size, 3, args.image_size, args.image_size),
             clip_denoised=args.clip_denoised,
+            t0=args.t0,
             model_kwargs=model_kwargs,
         )
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)

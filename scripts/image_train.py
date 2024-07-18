@@ -69,6 +69,7 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        t0=args.t0,
         sample_interval=args.sample_interval,  # Validation을 위한 sample interval
         fid_evaluator=fid_evaluator,
     ).run_loop()
@@ -90,6 +91,7 @@ def create_argparser():
         use_fp16=True,
         fp16_scale_growth=1e-3,
         model_path="",
+        t0=1000,
         num_fid_samples=32,
         sample_interval=2500,
         stats_dir=f"./results/{datetime.now().strftime('%Y%m%d_%H%M')}/stats_dir",

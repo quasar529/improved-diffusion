@@ -49,6 +49,7 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        t0=1000,
         sample_interval=2500,
         fid_evaluator=None,
     ):
@@ -67,6 +68,7 @@ class TrainLoop:
         self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
         self.weight_decay = weight_decay
         self.lr_anneal_steps = lr_anneal_steps
+        self.t0 = t0
         self.sample_interval = sample_interval
         self.fid_evaluator = fid_evaluator
 
@@ -123,6 +125,7 @@ class TrainLoop:
                 "schedule_sampler": schedule_sampler,
                 "weight_decay": weight_decay,
                 "lr_anneal_steps": lr_anneal_steps,
+                "t0": t0,
             }
         )
         wandb.run.name = f"diffusion_batch_{batch_size}_steps{lr_anneal_steps}_{self.resume_checkpoint}"
@@ -229,7 +232,7 @@ class TrainLoop:
         with tqdm(total=total_steps, desc="Training Progress", dynamic_ncols=True) as pbar:
             while not self.lr_anneal_steps or self.step + self.resume_step < self.lr_anneal_steps:
                 batch, cond = next(self.data)
-                self.run_step(batch, cond)
+                self.run_step(batch, cond, self.t0)
                 if self.step % self.log_interval == 0:
                     logger.dumpkvs()
                 if self.step % self.save_interval == 0:
@@ -255,15 +258,15 @@ class TrainLoop:
         if (self.step - 1) % self.save_interval != 0:
             self.save()
 
-    def run_step(self, batch, cond):
-        self.forward_backward(batch, cond)
+    def run_step(self, batch, cond, t0):
+        self.forward_backward(batch, cond, t0)
         if self.use_fp16:
             self.optimize_fp16()
         else:
             self.optimize_normal()
         self.log_step()
 
-    def forward_backward(self, batch, cond):
+    def forward_backward(self, batch, cond, t0):
         zero_grad(self.model_params)
         total_batches = (batch.shape[0] + self.microbatch - 1) // self.microbatch  # 전체 배치 수 계산
         progress_bar = tqdm(total=total_batches, desc="Processing Batches", leave=False, dynamic_ncols=True)
@@ -275,6 +278,9 @@ class TrainLoop:
             )  # 진행 바 설명 업데이트
 
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
+            t0_tensor = th.full((micro.shape[0],), t0, device=micro.device, dtype=th.long)
+            noised_micro = self.diffusion.q_sample(micro, t0_tensor)  # 원본 이미지 x_start에 T0만큼의 노이즈 추가
+
             micro_cond = {k: v[i : i + self.microbatch].to(dist_util.dev()) for k, v in cond.items()}
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
@@ -282,7 +288,7 @@ class TrainLoop:
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
                 self.ddp_model,
-                micro,
+                noised_micro,
                 t,
                 model_kwargs=micro_cond,
             )
