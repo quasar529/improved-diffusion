@@ -22,6 +22,7 @@ from .resample import LossAwareSampler, UniformSampler
 
 import wandb
 from tqdm import tqdm
+from datetime import datetime
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -48,6 +49,8 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        sample_interval=2500,
+        fid_evaluator=None,
     ):
         self.model = model
         self.diffusion = diffusion
@@ -64,6 +67,8 @@ class TrainLoop:
         self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
         self.weight_decay = weight_decay
         self.lr_anneal_steps = lr_anneal_steps
+        self.sample_interval = sample_interval
+        self.fid_evaluator = fid_evaluator
 
         self.step = 0
         self.resume_step = 0
@@ -159,6 +164,66 @@ class TrainLoop:
         self.master_params = make_master_params(self.model_params)
         self.model.convert_to_fp16()
 
+    def generate_samples(self):
+        all_images = []
+        all_labels = []
+        num_samples = self.fid_evaluator.n_samples  # 또는 원하는 샘플 수
+        batch_size = self.batch_size  # 또는 원하는 배치 크기
+
+        with th.no_grad():
+            while len(all_images) * batch_size < num_samples:
+                model_kwargs = {}
+                # if self.args.class_cond:
+                #     classes = th.randint(low=0, high=self.num_classes, size=(batch_size,), device=self.device)
+                #     model_kwargs["y"] = classes
+
+                sample_fn = (
+                    self.diffusion.ddim_sample_loop
+                    # self.diffusion.p_sample_loop if not self.diffusion.use_ddim else self.diffusion.ddim_sample_loop
+                )
+                sample = sample_fn(
+                    self.model,
+                    (batch_size, 3, 64, 64),
+                    # (batch_size, 3, self.diffusion.image_size, self.diffusion.image_size),
+                    clip_denoised=True,
+                    # clip_denoised=self.args.clip_denoised,
+                    model_kwargs=model_kwargs,
+                )
+                sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
+                sample = sample.permute(0, 2, 3, 1)
+                sample = sample.contiguous()
+
+                all_images.extend([sample.cpu().numpy()])
+                # if self.args.class_cond:
+                #     all_labels.extend([classes.cpu().numpy()])
+
+                logger.log(f"created {len(all_images) * batch_size} samples")
+
+        arr = np.concatenate(all_images, axis=0)
+        arr = arr[:num_samples]
+        # if self.args.class_cond:
+        #     label_arr = np.concatenate(all_labels, axis=0)
+        #     label_arr = label_arr[:num_samples]
+
+        # 샘플 저장
+        shape_str = "x".join([str(x) for x in arr.shape])
+        # out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
+        if not os.path.exists(self.fid_evaluator.stats_dir):
+            os.makedirs(self.fid_evaluator.stats_dir)
+            print(f"{self.fid_evaluator.stats_dir} created")
+        else:
+            print(f"{self.fid_evaluator.stats_dir} already exists")
+        out_path = os.path.join(self.fid_evaluator.stats_dir, f"{self.step}_samples_{shape_str}.npz")
+
+        logger.log(f"saving samples to {out_path}")
+        # if self.args.class_cond:
+        #     np.savez(out_path, arr, label_arr)
+        # else:
+        #     np.savez(out_path, arr)
+        np.savez(out_path, arr)
+        logger.log("sampling complete")
+        return out_path  # 샘플이 저장된 경로
+
     def run_loop(self):
         total_steps = self.lr_anneal_steps if self.lr_anneal_steps else float("inf")
         with tqdm(total=total_steps, desc="Training Progress", dynamic_ncols=True) as pbar:
@@ -172,6 +237,17 @@ class TrainLoop:
                     # Run for a finite amount of time in integration tests.
                     if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                         return
+
+                if self.step % self.sample_interval == 0:
+                    logger.log(f"Generating samples at step {self.step}...")
+                    samples_path = self.generate_samples()
+                    self.fid_evaluator.set_samples_path(samples_path)
+
+                    logger.log(f"Calculating FID score...")
+                    fid_score = self.fid_evaluator.fid_score()
+
+                    logger.log(f"FID score at step {self.step}: {fid_score}")
+                    wandb.log({"valid/fid_score": fid_score})
                 self.step += 1
                 pbar.update(1)  # Update the progress bar
 
@@ -281,7 +357,7 @@ class TrainLoop:
         if self.use_fp16:
             logger.logkv("lg_loss_scale", self.lg_loss_scale)
 
-    def save(self, save_dir="/home/jun/improved-diffusion/results"):
+    def save(self, save_dir=f"/home/jun/improved-diffusion/results/{datetime.now().strftime('%Y%m%d_%H%M')}"):
         def save_checkpoint(rate, params):
             state_dict = self._master_params_to_state_dict(params)
             if dist.get_rank() == 0:
