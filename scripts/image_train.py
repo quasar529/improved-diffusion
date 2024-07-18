@@ -14,6 +14,9 @@ from improved_diffusion.script_util import (
     add_dict_to_argparser,
 )
 from improved_diffusion.train_util import TrainLoop
+from improved_diffusion.fid_evaluation import FIDEvaluation
+
+from datetime import datetime
 
 
 def main():
@@ -24,7 +27,7 @@ def main():
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(**args_to_dict(args, model_and_diffusion_defaults().keys()))
-    #model.load_state_dict(dist_util.load_state_dict(args.model_path, map_location="cpu"))
+    # model.load_state_dict(dist_util.load_state_dict(args.model_path, map_location="cpu"))
     model.to(dist_util.dev())
     print(dist_util.dev())
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
@@ -35,6 +38,18 @@ def main():
         batch_size=args.batch_size,
         image_size=args.image_size,
         class_cond=args.class_cond,
+    )
+
+    logger.log("creating FID evaluator...")
+
+    fid_evaluator = FIDEvaluation(
+        batch_size=args.batch_size,
+        dl=data,
+        sampler=diffusion,
+        channels=3,
+        device=dist_util.dev(),
+        num_fid_samples=args.num_fid_samples,
+        stats_dir=args.stats_dir,
     )
 
     logger.log("training...")
@@ -54,6 +69,8 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        sample_interval=args.sample_interval,  # Validation을 위한 sample interval
+        fid_evaluator=fid_evaluator,
     ).run_loop()
 
 
@@ -63,7 +80,7 @@ def create_argparser():
         schedule_sampler="uniform",
         lr=1e-4,
         weight_decay=0.0,
-        lr_anneal_steps=10000,
+        lr_anneal_steps=30000,
         batch_size=1,
         microbatch=-1,  # -1 disables microbatches
         ema_rate="0.9999",  # comma-separated list of EMA values
@@ -73,6 +90,9 @@ def create_argparser():
         use_fp16=True,
         fp16_scale_growth=1e-3,
         model_path="",
+        num_fid_samples=32,
+        sample_interval=2500,
+        stats_dir=f"./results/{datetime.now().strftime('%Y%m%d_%H%M')}/stats_dir",
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
