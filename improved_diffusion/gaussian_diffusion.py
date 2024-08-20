@@ -14,6 +14,9 @@ import torch as th
 from .nn import mean_flat
 from .losses import normal_kl, discretized_gaussian_log_likelihood
 
+from ambient_utils import *
+from diffusers_utils import *
+
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
     """
@@ -623,13 +626,14 @@ class GaussianDiffusion:
 
         :param model: the model to evaluate loss on.
         :param x_start: the [N x C x ...] tensor of inputs.
-        :param t: a batch of timestep indices.
+        :param t: a batch of timestep indices. batch 크기 만큼의 랜덤 타임 스텝, 단 tn보다 커야함.
         :param model_kwargs: if not None, a dict of extra keyword arguments to
             pass to the model. This can be used for conditioning.
         :param noise: if specified, the specific Gaussian noise to try to remove.
         :return: a dict with the key "loss" containing a tensor of shape [N].
                  Some mean or variance settings may also have other keys.
         """
+        # x_start가 x_tn 역할
         if model_kwargs is None:
             model_kwargs = {}
         if noise is None:

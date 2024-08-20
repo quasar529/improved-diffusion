@@ -67,6 +67,21 @@ class UniformSampler(ScheduleSampler):
         return self._weights
 
 
+class RangeUniformSampler(UniformSampler):
+    def __init__(self, diffusion, start_step=100):
+        # start_step을 부모 클래스에 전달하여 초기화
+        end_step = diffusion.num_timesteps  # 종료 단계를 diffusion의 전체 타임스텝으로 설정
+        super().__init__(diffusion, start_step=start_step, end_step=end_step)
+
+        # 가중치를 설정, start_step 이전은 0으로 설정하고 이후는 1로 설정
+        self._weights = np.zeros([diffusion.num_timesteps])
+        if start_step < diffusion.num_timesteps:
+            self._weights[start_step:] = 1
+
+    def weights(self):
+        return self._weights
+
+
 class LossAwareSampler(ScheduleSampler):
     def update_with_local_losses(self, local_ts, local_losses):
         """
@@ -80,10 +95,7 @@ class LossAwareSampler(ScheduleSampler):
         :param local_ts: an integer Tensor of timesteps.
         :param local_losses: a 1D Tensor of losses.
         """
-        batch_sizes = [
-            th.tensor([0], dtype=th.int32, device=local_ts.device)
-            for _ in range(dist.get_world_size())
-        ]
+        batch_sizes = [th.tensor([0], dtype=th.int32, device=local_ts.device) for _ in range(dist.get_world_size())]
         dist.all_gather(
             batch_sizes,
             th.tensor([len(local_ts)], dtype=th.int32, device=local_ts.device),
@@ -97,9 +109,7 @@ class LossAwareSampler(ScheduleSampler):
         loss_batches = [th.zeros(max_bs).to(local_losses) for bs in batch_sizes]
         dist.all_gather(timestep_batches, local_ts)
         dist.all_gather(loss_batches, local_losses)
-        timesteps = [
-            x.item() for y, bs in zip(timestep_batches, batch_sizes) for x in y[:bs]
-        ]
+        timesteps = [x.item() for y, bs in zip(timestep_batches, batch_sizes) for x in y[:bs]]
         losses = [x.item() for y, bs in zip(loss_batches, batch_sizes) for x in y[:bs]]
         self.update_with_all_losses(timesteps, losses)
 
@@ -126,15 +136,13 @@ class LossSecondMomentResampler(LossAwareSampler):
         self.diffusion = diffusion
         self.history_per_term = history_per_term
         self.uniform_prob = uniform_prob
-        self._loss_history = np.zeros(
-            [diffusion.num_timesteps, history_per_term], dtype=np.float64
-        )
+        self._loss_history = np.zeros([diffusion.num_timesteps, history_per_term], dtype=np.float64)
         self._loss_counts = np.zeros([diffusion.num_timesteps], dtype=np.int)
 
     def weights(self):
         if not self._warmed_up():
             return np.ones([self.diffusion.num_timesteps], dtype=np.float64)
-        weights = np.sqrt(np.mean(self._loss_history ** 2, axis=-1))
+        weights = np.sqrt(np.mean(self._loss_history**2, axis=-1))
         weights /= np.sum(weights)
         weights *= 1 - self.uniform_prob
         weights += self.uniform_prob / len(weights)

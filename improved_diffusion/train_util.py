@@ -18,7 +18,7 @@ from .fp16_util import (
     zero_grad,
 )
 from .nn import update_ema
-from .resample import LossAwareSampler, UniformSampler
+from .resample import LossAwareSampler, UniformSampler, RangeUniformSampler
 
 import wandb
 from tqdm import tqdm
@@ -65,10 +65,11 @@ class TrainLoop:
         self.resume_checkpoint = resume_checkpoint
         self.use_fp16 = use_fp16
         self.fp16_scale_growth = fp16_scale_growth
-        self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
+        # self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
+        self.t0 = t0
+        self.schedule_sampler = RangeUniformSampler(diffusion, start_step=t0)
         self.weight_decay = weight_decay
         self.lr_anneal_steps = lr_anneal_steps
-        self.t0 = t0
         self.sample_interval = sample_interval
         self.fid_evaluator = fid_evaluator
 
@@ -278,8 +279,11 @@ class TrainLoop:
             )  # 진행 바 설명 업데이트
 
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
-            t0_tensor = th.full((micro.shape[0],), t0, device=micro.device, dtype=th.long)
-            noised_micro = self.diffusion.q_sample(micro, t0_tensor)  # 원본 이미지 x_start에 T0만큼의 노이즈 추가
+
+            # 원본 이미지 x_start에 tn만큼의 노이즈 추가
+            # 모델은 원본 이미지 못봄
+            tn_tensor = th.full((micro.shape[0],), t0, device=micro.device, dtype=th.long)
+            x_tn = self.diffusion.q_sample(micro, tn_tensor)
 
             micro_cond = {k: v[i : i + self.microbatch].to(dist_util.dev()) for k, v in cond.items()}
             last_batch = (i + self.microbatch) >= batch.shape[0]
@@ -288,7 +292,7 @@ class TrainLoop:
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
                 self.ddp_model,
-                noised_micro,
+                x_tn,
                 t,
                 model_kwargs=micro_cond,
             )
