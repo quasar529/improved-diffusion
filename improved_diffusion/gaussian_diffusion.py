@@ -14,8 +14,8 @@ import torch as th
 from .nn import mean_flat
 from .losses import normal_kl, discretized_gaussian_log_likelihood
 
-from ambient_utils import *
-from diffusers_utils import *
+import ambient_utils
+import diffusers_utils
 
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
@@ -158,6 +158,9 @@ class GaussianDiffusion:
         )
         self.posterior_mean_coef1 = betas * np.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
         self.posterior_mean_coef2 = (1.0 - self.alphas_cumprod_prev) * np.sqrt(alphas) / (1.0 - self.alphas_cumprod)
+
+        self.x0_pred = False
+        self.timestep_nature = 100
 
     def q_mean_variance(self, x_start, t):
         """
@@ -638,7 +641,15 @@ class GaussianDiffusion:
             model_kwargs = {}
         if noise is None:
             noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)
+        # x_t = self.q_sample(x_start, t, noise=noise)
+        # σ_t (desired_sigmas), σ_tn(current_sigmas, 모두 timestep_nature에 해당하는 noise ) 계산
+        desired_sigmas = ambient_utils.diffusers_utils.timesteps_to_sigma(t, self.alphas_cumprod.to(t.device))
+        current_sigmas = ambient_utils.diffusers_utils.timesteps_to_sigma(
+            th.ones_like(t) * self.timestep_nature, self.alphas_cumprod.to(t.device)
+        )
+        noisy_model_input, noise_realization, noise_mask = ambient_utils.add_extra_noise_from_vp_to_vp(
+            x_start, current_sigmas, desired_sigmas
+        )
 
         terms = {}
 
@@ -654,7 +665,7 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
+            model_pred = model(noisy_model_input, self._scale_timesteps(t), **model_kwargs)
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,
@@ -677,14 +688,38 @@ class GaussianDiffusion:
                     # Divide by 1000 for equivalence with initial implementation.
                     # Without a factor of 1/1000, the VB term hurts the MSE term.
                     terms["vb"] *= self.num_timesteps / 1000.0
+            # Ambient Diffusion : x0_pred, x_t -> x_tn_pred
+
+            x0_pred = ambient_utils.from_noise_pred_to_x0_pred_vp(noisy_model_input, model_pred, desired_sigmas)
+            xn_pred = ambient_utils.from_x0_pred_to_xnature_pred_vp_to_vp(
+                x0_pred, noisy_model_input, current_sigmas, desired_sigmas
+            )
+
+            if self.x0_pred:
+                model_pred = xn_pred
+                target = x_start
+            else:
+                xtn_coeff = th.sqrt((1 - desired_sigmas**2) / (1 - current_sigmas**2))
+                noise_coeff = th.sqrt((desired_sigmas**2 - current_sigmas**2) / (1 - current_sigmas**2))
+                noise_pred = (noisy_model_input - xtn_coeff[:, None, None, None] * xn_pred) / noise_coeff[
+                    :, None, None, None
+                ]
+                model_pred = noise_pred
+                target = noise_realization
 
             target = {
-                ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(x_start=x_start, x_t=x_t, t=t)[0],
-                ModelMeanType.START_X: x_start,
-                ModelMeanType.EPSILON: noise,
+                ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(x_start=x_start, x_t=model_pred, t=t)[0],
+                ModelMeanType.START_X: x0_pred,
+                ModelMeanType.EPSILON: noise_realization,
             }[self.model_mean_type]
-            assert model_output.shape == target.shape == x_start.shape
-            terms["mse"] = mean_flat((target - model_output) ** 2)
+            assert model_pred.shape == target.shape == x_start.shape
+
+            loss = (model_pred.float() - target.float()) ** 2
+            loss = th.where(noise_mask[:, None, None, None] == 0, th.zeros_like(loss), loss)
+            loss = ambient_utils.get_mean_loss(loss, noise_mask)
+
+            terms["mse"] = loss
+
             if "vb" in terms:
                 terms["loss"] = terms["mse"] + terms["vb"]
             else:

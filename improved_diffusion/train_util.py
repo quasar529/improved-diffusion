@@ -49,7 +49,7 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
-        t0=1000,
+        t0=100,
         sample_interval=2500,
         fid_evaluator=None,
     ):
