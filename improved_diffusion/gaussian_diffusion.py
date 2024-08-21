@@ -13,9 +13,16 @@ import torch as th
 
 from .nn import mean_flat
 from .losses import normal_kl, discretized_gaussian_log_likelihood
+import sys
+import os
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
 
 import ambient_utils
 import diffusers_utils
+
+import wandb
 
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
@@ -158,6 +165,21 @@ class GaussianDiffusion:
         )
         self.posterior_mean_coef1 = betas * np.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
         self.posterior_mean_coef2 = (1.0 - self.alphas_cumprod_prev) * np.sqrt(alphas) / (1.0 - self.alphas_cumprod)
+
+        # convert every attribute to tensors
+        self.alphas_cumprod = th.tensor(self.alphas_cumprod, dtype=th.float32)
+        self.alphas_cumprod_prev = th.tensor(self.alphas_cumprod_prev, dtype=th.float32)
+        self.alphas_cumprod_next = th.tensor(self.alphas_cumprod_next, dtype=th.float32)
+        self.sqrt_alphas_cumprod = th.tensor(self.sqrt_alphas_cumprod, dtype=th.float32)
+        self.sqrt_one_minus_alphas_cumprod = th.tensor(self.sqrt_one_minus_alphas_cumprod, dtype=th.float32)
+        self.log_one_minus_alphas_cumprod = th.tensor(self.log_one_minus_alphas_cumprod, dtype=th.float32)
+        self.sqrt_recip_alphas_cumprod = th.tensor(self.sqrt_recip_alphas_cumprod, dtype=th.float32)
+        self.sqrt_recipm1_alphas_cumprod = th.tensor(self.sqrt_recipm1_alphas_cumprod, dtype=th.float32)
+
+        self.posterior_variance = th.tensor(self.posterior_variance, dtype=th.float32)
+        self.posterior_log_variance_clipped = th.tensor(self.posterior_log_variance_clipped, dtype=th.float32)
+        self.posterior_mean_coef1 = th.tensor(self.posterior_mean_coef1, dtype=th.float32)
+        self.posterior_mean_coef2 = th.tensor(self.posterior_mean_coef2, dtype=th.float32)
 
         self.x0_pred = False
         self.timestep_nature = 100
@@ -643,10 +665,11 @@ class GaussianDiffusion:
             noise = th.randn_like(x_start)
         # x_t = self.q_sample(x_start, t, noise=noise)
         # σ_t (desired_sigmas), σ_tn(current_sigmas, 모두 timestep_nature에 해당하는 noise ) 계산
-        desired_sigmas = ambient_utils.diffusers_utils.timesteps_to_sigma(t, self.alphas_cumprod.to(t.device))
-        current_sigmas = ambient_utils.diffusers_utils.timesteps_to_sigma(
+        desired_sigmas = diffusers_utils.timesteps_to_sigma(t, self.alphas_cumprod.to(t.device))
+        current_sigmas = diffusers_utils.timesteps_to_sigma(
             th.ones_like(t) * self.timestep_nature, self.alphas_cumprod.to(t.device)
         )
+        wandb.log({"desired_sigmas": desired_sigmas, "current_sigmas": current_sigmas})
         noisy_model_input, noise_realization, noise_mask = ambient_utils.add_extra_noise_from_vp_to_vp(
             x_start, current_sigmas, desired_sigmas
         )
@@ -671,16 +694,16 @@ class GaussianDiffusion:
                 ModelVarType.LEARNED,
                 ModelVarType.LEARNED_RANGE,
             ]:
-                B, C = x_t.shape[:2]
-                assert model_output.shape == (B, C * 2, *x_t.shape[2:])
-                model_output, model_var_values = th.split(model_output, C, dim=1)
+                B, C = noisy_model_input.shape[:2]
+                assert model_pred.shape == (B, C * 2, *noisy_model_input.shape[2:])
+                model_pred, model_var_values = th.split(model_pred, C, dim=1)
                 # Learn the variance using the variational bound, but don't let
                 # it affect our mean prediction.
-                frozen_out = th.cat([model_output.detach(), model_var_values], dim=1)
+                frozen_out = th.cat([model_pred.detach(), model_var_values], dim=1)
                 terms["vb"] = self._vb_terms_bpd(
                     model=lambda *args, r=frozen_out: r,
                     x_start=x_start,
-                    x_t=x_t,
+                    x_t=noisy_model_input,
                     t=t,
                     clip_denoised=False,
                 )["output"]
@@ -813,7 +836,15 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
                             dimension equal to the length of timesteps.
     :return: a tensor of shape [batch_size, 1, ...] where the shape has K dims.
     """
-    res = th.from_numpy(arr).to(device=timesteps.device)[timesteps].float()
+    # If arr is a numpy array, convert it to a tensor
+    if isinstance(arr, np.ndarray):
+        arr = th.from_numpy(arr).to(device=timesteps.device)
+    else:
+        # Ensure arr is on the same device as timesteps
+        arr = arr.to(device=timesteps.device)
+
+    res = arr[timesteps].float()
+    # res = th.from_numpy(arr).to(device=timesteps.device)[timesteps].float()
     while len(res.shape) < len(broadcast_shape):
         res = res[..., None]
     return res.expand(broadcast_shape)

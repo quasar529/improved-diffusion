@@ -64,6 +64,10 @@ def retrieve_timesteps(
 
 def timesteps_to_sigma(timesteps, alphas_cumprod):
     """Convert timesteps to sigmas."""
+
+    """Convert timesteps to sigmas."""
+    if isinstance(timesteps, torch.Tensor):
+        timesteps = timesteps.cpu().numpy()  # torch.Tensor -> numpy.ndarray 변환
     sqrt_alpha_prod = alphas_cumprod[timesteps] ** 0.5
     sqrt_alpha_prod = sqrt_alpha_prod.flatten()
     sqrt_one_minus_alpha_prod = (1 - alphas_cumprod[timesteps]) ** 0.5

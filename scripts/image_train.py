@@ -91,7 +91,7 @@ def create_argparser():
         use_fp16=True,
         fp16_scale_growth=1e-3,
         model_path="",
-        t0=1000,
+        t0=100,
         num_fid_samples=32,
         sample_interval=2500,
         stats_dir=f"./results/{datetime.now().strftime('%Y%m%d_%H%M')}/stats_dir",

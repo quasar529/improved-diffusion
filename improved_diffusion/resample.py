@@ -69,9 +69,10 @@ class UniformSampler(ScheduleSampler):
 
 class RangeUniformSampler(UniformSampler):
     def __init__(self, diffusion, start_step=100):
-        # start_step을 부모 클래스에 전달하여 초기화
-        end_step = diffusion.num_timesteps  # 종료 단계를 diffusion의 전체 타임스텝으로 설정
-        super().__init__(diffusion, start_step=start_step, end_step=end_step)
+        super().__init__(diffusion)  # 부모 클래스 초기화
+
+        self.start_step = start_step
+        self.end_step = diffusion.num_timesteps
 
         # 가중치를 설정, start_step 이전은 0으로 설정하고 이후는 1로 설정
         self._weights = np.zeros([diffusion.num_timesteps])

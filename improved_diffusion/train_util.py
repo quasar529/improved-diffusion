@@ -129,7 +129,9 @@ class TrainLoop:
                 "t0": t0,
             }
         )
-        wandb.run.name = f"diffusion_batch_{batch_size}_steps{lr_anneal_steps}_{self.resume_checkpoint}"
+        wandb.run.name = (
+            f"expanded_diffusion_{self.resume_checkpoint.split('/')[-1]}_batch{batch_size}_steps{lr_anneal_steps}"
+        )
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
@@ -242,7 +244,7 @@ class TrainLoop:
                     if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                         return
 
-                if self.step % self.sample_interval == 0:
+                if self.step % self.sample_interval == 0 and self.step > 0:
                     logger.log(f"Generating samples at step {self.step}...")
                     samples_path = self.generate_samples()
                     self.fid_evaluator.set_samples_path(samples_path)
@@ -256,7 +258,7 @@ class TrainLoop:
                 pbar.update(1)  # Update the progress bar
 
         # Save the last checkpoint if it wasn't already saved.
-        if (self.step - 1) % self.save_interval != 0:
+        if (self.step - 1) % self.save_interval != 0 and self.step > 0:
             self.save()
 
     def run_step(self, batch, cond, t0):
